@@ -222,6 +222,14 @@ data Conversion = Conversion
 
 data UnionConv = UFirst | UNone | UStrict deriving (Show, Read, Eq)
 
+defaultConversion :: Conversion
+defaultConversion =  Conversion
+    { strictRecs  = False
+    , noKeyValArr = False
+    , noKeyValMap = False
+    , unions      = UFirst
+    }
+
 -- | Parser for command options related to the conversion method
 parseConversion :: Parser Conversion
 parseConversion = Conversion <$> parseStrict
@@ -321,7 +329,7 @@ resolveSchemaExpr code = do
       case Dhall.Parser.exprFromText "\n\ESC[1;31mSCHEMA\ESC[0m" code of
         Left  err              -> Control.Exception.throwIO err
         Right parsedExpression -> return parsedExpression
-    D.normalize <$> Dhall.Import.load parsedExpression -- IO
+    D.normalizeNoSort <$> Dhall.Import.load parsedExpression -- IO
 
 -- | Check that the Dhall type expression actually has type 'Type'
 typeCheckSchemaExpr :: MonadCatch m
@@ -335,7 +343,7 @@ typeCheckSchemaExpr expr =
 
 keyValMay :: A.Value -> Maybe (Text, A.Value)
 keyValMay (A.Object o) = do
-     A.String k <- HM.lookup "key"   o
+     A.String k <- HM.lookup "key" o
      v <- HM.lookup "value" o
      return (k, v)
 keyValMay _ = Nothing

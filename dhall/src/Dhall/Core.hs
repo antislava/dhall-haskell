@@ -37,6 +37,9 @@ module Dhall.Core (
     , normalize
     , normalizeWith
     , normalizeWithM
+    , normalizeNoSort
+    , normalizeNoSortWith
+    , normalizeNoSortWithM
     , Normalizer
     , NormalizerM
     , ReifiedNormalizer (..)
@@ -1457,6 +1460,9 @@ alphaNormalize (Embed a) =
 normalize :: ToTerm a => Expr s a -> Expr t a
 normalize = normalizeWith (const (pure Nothing))
 
+normalizeNoSort :: ToTerm a => Expr s a -> Expr t a
+normalizeNoSort = normalizeNoSortWith (const (pure Nothing))
+
 {-| This function is used to determine whether folds like @Natural/fold@ or
     @List/fold@ should be lazy or strict in their accumulator based on the type
     of the accumulator
@@ -1567,9 +1573,25 @@ denote (Embed a             ) = Embed a
 normalizeWith :: ToTerm a => Normalizer a -> Expr s a -> Expr t a
 normalizeWith ctx = runIdentity . normalizeWithM ctx
 
+normalizeNoSortWith :: ToTerm a => Normalizer a -> Expr s a -> Expr t a
+normalizeNoSortWith ctx = runIdentity . normalizeNoSortWithM ctx
+
+data KeySort t a = KeySort
+  { orderR :: Map Text (Expr t a)         -> Map Text (Expr t a)
+  , orderU :: Map Text (Maybe (Expr t a)) -> Map Text (Maybe (Expr t a))
+  }
+
+normalizeNoSortWithM
+    :: (Monad m, ToTerm a) => NormalizerM m a -> Expr s a -> m (Expr t a)
+normalizeNoSortWithM = normalizeWithM' $ KeySort id id
+
 normalizeWithM
     :: (Monad m, ToTerm a) => NormalizerM m a -> Expr s a -> m (Expr t a)
-normalizeWithM ctx e0 = loop (denote e0)
+normalizeWithM = normalizeWithM' $ KeySort Dhall.Map.sort Dhall.Map.sort
+
+normalizeWithM'
+    :: (Monad m, ToTerm a) => KeySort t a -> NormalizerM m a -> Expr s a -> m (Expr t a)
+normalizeWithM' (KeySort {..}) ctx e0 = loop (denote e0)
  where
  loop e =  case e of
     Const k -> pure (Const k)
@@ -1860,16 +1882,16 @@ normalizeWithM ctx e0 = loop (denote e0)
     None -> pure None
     OptionalFold -> pure OptionalFold
     OptionalBuild -> pure OptionalBuild
-    Record kts -> Record . Dhall.Map.sort <$> kts'
+    Record kts -> Record . orderR <$> kts'
       where
         kts' = traverse loop kts
-    RecordLit kvs -> RecordLit . Dhall.Map.sort <$> kvs'
+    RecordLit kvs -> RecordLit . orderR <$> kvs'
       where
         kvs' = traverse loop kvs
-    Union kts -> Union . Dhall.Map.sort <$> kts'
+    Union kts -> Union . orderU <$> kts'
       where
         kts' = traverse (traverse loop) kts
-    UnionLit k v kvs -> UnionLit k <$> v' <*> (Dhall.Map.sort <$> kvs')
+    UnionLit k v kvs -> UnionLit k <$> v' <*> (orderU <$> kvs')
       where
         v'   =                    loop  v
         kvs' = traverse (traverse loop) kvs
@@ -1880,7 +1902,7 @@ normalizeWithM ctx e0 = loop (denote e0)
         decide l (RecordLit n) | Data.Foldable.null n =
             l
         decide (RecordLit m) (RecordLit n) =
-            RecordLit (Dhall.Map.sort (Dhall.Map.unionWith decide m n))
+            RecordLit (orderR (Dhall.Map.unionWith decide m n))
         decide l r =
             Combine l r
     CombineTypes x y -> decide <$> loop x <*> loop y
@@ -1890,7 +1912,7 @@ normalizeWithM ctx e0 = loop (denote e0)
         decide l (Record n) | Data.Foldable.null n =
             l
         decide (Record m) (Record n) =
-            Record (Dhall.Map.sort (Dhall.Map.unionWith decide m n))
+            Record (orderR (Dhall.Map.unionWith decide m n))
         decide l r =
             CombineTypes l r
     Prefer x y -> decide <$> loop x <*> loop y
@@ -1900,7 +1922,7 @@ normalizeWithM ctx e0 = loop (denote e0)
         decide l (RecordLit n) | Data.Foldable.null n =
             l
         decide (RecordLit m) (RecordLit n) =
-            RecordLit (Dhall.Map.sort (Dhall.Map.union n m))
+            RecordLit (orderR (Dhall.Map.union n m))
         decide l r =
             Prefer l r
     Merge x y t      -> do
